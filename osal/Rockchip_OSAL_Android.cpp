@@ -233,6 +233,7 @@ OMX_U32 Get_Video_HorAlign(OMX_VIDEO_CODINGTYPE codecId, OMX_U32 width, OMX_U32 
             }
         }
     }
+
     return stride;
 }
 
@@ -252,6 +253,43 @@ OMX_U32 Get_Video_VerAlign(OMX_VIDEO_CODINGTYPE codecId, OMX_U32 height, OMX_U32
     return stride;
 }
 
+OMX_BOOL Rockchip_OSAL_Check_Use_FBCMode(OMX_VIDEO_CODINGTYPE codecId, int32_t depth,
+                                         ROCKCHIP_OMX_BASEPORT *pPort)
+{
+    OMX_BOOL fbcMode = OMX_FALSE;
+    OMX_U32 pValue;
+    OMX_U32 width, height;
+
+
+    Rockchip_OSAL_GetEnvU32("omx_fbc_disable", &pValue, 0);
+    if (pValue == 1) {
+        return OMX_FALSE;
+    }
+
+    if (pPort->bufferProcessType != BUFFER_SHARE) {
+        return OMX_FALSE;
+    }
+
+    width = pPort->portDefinition.format.video.nFrameWidth;
+    height = pPort->portDefinition.format.video.nFrameHeight;
+
+#ifdef SUPPORT_AFBC
+    // 10bit force set fbc mode
+    if ((depth ==  OMX_DEPTH_BIT_10) || ((width * height > 1920 * 1088)
+                                         && (codecId == OMX_VIDEO_CodingAVC
+                                             || codecId == OMX_VIDEO_CodingHEVC
+                                             || codecId == OMX_VIDEO_CodingVP9))) {
+        fbcMode = OMX_TRUE;
+    }
+#else
+    (void)codecId;
+    (void)width;
+    (void)height;
+    (void)depth;
+#endif
+
+    return fbcMode;
+}
 
 OMX_ERRORTYPE Rockchip_OSAL_LockANB(
     OMX_IN OMX_PTR pBuffer,
@@ -1235,13 +1273,29 @@ OMX_COLOR_FORMATTYPE Rockchip_OSAL_CheckFormat(
 {
     RKVPU_OMX_VIDEODEC_COMPONENT    *pVideoDec          = (RKVPU_OMX_VIDEODEC_COMPONENT *)pRockchipComponent->hComponentHandle;
     ROCKCHIP_OMX_BASEPORT           *pInputPort         = &pRockchipComponent->pRockchipPort[INPUT_PORT_INDEX];
-    OMX_COLOR_FORMATTYPE             eColorFormat       = (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_YCrCb_NV12;
+    ROCKCHIP_OMX_BASEPORT           *pOutputPort        = &pRockchipComponent->pRockchipPort[OUTPUT_PORT_INDEX];
+    OMX_COLOR_FORMATTYPE             eColorFormat       = pOutputPort->portDefinition.format.video.eColorFormat;
     VPU_FRAME *pframe = (VPU_FRAME *)pVpuframe;
 
     if ((pVideoDec->codecId == OMX_VIDEO_CodingHEVC && (pframe->OutputWidth != 0x20))
         || (pframe->ColorType & VPU_OUTPUT_FORMAT_BIT_MASK) == VPU_OUTPUT_FORMAT_BIT_10) { // 10bit
-        eColorFormat = (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_YCrCb_NV12_10;
-        omx_trace("set format to nv12 10bit");
+        OMX_BOOL fbcMode = Rockchip_OSAL_Check_Use_FBCMode(pVideoDec->codecId,
+                                                           (int32_t)OMX_DEPTH_BIT_10, pOutputPort);
+
+        if ((pframe->ColorType & 0xf) == VPU_OUTPUT_FORMAT_YUV422) {
+            if (fbcMode) {
+                eColorFormat = (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_Y210;
+            } else {
+                eColorFormat = (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_YCbCr_422_SP_10;
+            }
+        } else {
+            if (fbcMode) {
+                eColorFormat = (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_YUV420_10BIT_I;
+            } else {
+                eColorFormat = (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_YCrCb_NV12_10;
+            }
+        }
+
         if ((pframe->ColorType & OMX_COLORSPACE_MASK) != 0) {
             OMX_RK_EXT_COLORSPACE colorSpace = (OMX_RK_EXT_COLORSPACE)((pframe->ColorType & OMX_COLORSPACE_MASK) >> 20);
             pVideoDec->extColorSpace = colorSpace;

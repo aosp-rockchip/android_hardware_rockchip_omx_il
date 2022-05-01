@@ -77,42 +77,31 @@ static const CodecProfileLevel kM2VProfileLevels[] = {
 };
 
 static const CodecProfileLevel kM4VProfileLevels[] = {
-    { OMX_VIDEO_MPEG4ProfileSimple, OMX_VIDEO_MPEG4Level0 },
-    { OMX_VIDEO_MPEG4ProfileSimple, OMX_VIDEO_MPEG4Level0b},
-    { OMX_VIDEO_MPEG4ProfileSimple, OMX_VIDEO_MPEG4Level1 },
-    { OMX_VIDEO_MPEG4ProfileSimple, OMX_VIDEO_MPEG4Level2 },
     { OMX_VIDEO_MPEG4ProfileSimple, OMX_VIDEO_MPEG4Level3 },
 };
 
 static const CodecProfileLevel kH263ProfileLevels[] = {
-    { OMX_VIDEO_H263ProfileBaseline, OMX_VIDEO_H263Level10 },
-    { OMX_VIDEO_H263ProfileBaseline, OMX_VIDEO_H263Level20 },
-    { OMX_VIDEO_H263ProfileBaseline, OMX_VIDEO_H263Level30 },
     { OMX_VIDEO_H263ProfileBaseline, OMX_VIDEO_H263Level45 },
-    { OMX_VIDEO_H263ProfileISWV2,    OMX_VIDEO_H263Level10 },
-    { OMX_VIDEO_H263ProfileISWV2,    OMX_VIDEO_H263Level20 },
-    { OMX_VIDEO_H263ProfileISWV2,    OMX_VIDEO_H263Level30 },
     { OMX_VIDEO_H263ProfileISWV2,    OMX_VIDEO_H263Level45 },
 };
 
-//only report echo profile highest level, Reference soft avc dec
 static const CodecProfileLevel kH264ProfileLevelsMax[] = {
     { OMX_VIDEO_AVCProfileBaseline, OMX_VIDEO_AVCLevel51 },
     { OMX_VIDEO_AVCProfileMain, OMX_VIDEO_AVCLevel51},
     { OMX_VIDEO_AVCProfileHigh, OMX_VIDEO_AVCLevel51},
+    { OMX_VIDEO_AVCProfileHigh10, OMX_VIDEO_AVCLevel52},
 };
 
 static const CodecProfileLevel kH265ProfileLevels[] = {
-    { OMX_VIDEO_HEVCProfileMain, OMX_VIDEO_HEVCMainTierLevel1  },
-    { OMX_VIDEO_HEVCProfileMain, OMX_VIDEO_HEVCMainTierLevel2  },
-    { OMX_VIDEO_HEVCProfileMain, OMX_VIDEO_HEVCMainTierLevel21 },
-    { OMX_VIDEO_HEVCProfileMain, OMX_VIDEO_HEVCMainTierLevel3  },
-    { OMX_VIDEO_HEVCProfileMain, OMX_VIDEO_HEVCMainTierLevel31 },
-    { OMX_VIDEO_HEVCProfileMain, OMX_VIDEO_HEVCMainTierLevel4  },
-    { OMX_VIDEO_HEVCProfileMain, OMX_VIDEO_HEVCMainTierLevel41 },
-    { OMX_VIDEO_HEVCProfileMain, OMX_VIDEO_HEVCMainTierLevel5  },
     { OMX_VIDEO_HEVCProfileMain, OMX_VIDEO_HEVCMainTierLevel51 },
     { OMX_VIDEO_HEVCProfileMain10, OMX_VIDEO_HEVCMainTierLevel51 },
+};
+
+static const CodecProfileLevel kVP9ProfileLevels[] = {
+    { OMX_VIDEO_VP9Profile0, OMX_VIDEO_VP9Level51 },
+    { OMX_VIDEO_VP9Profile2, OMX_VIDEO_VP9Level51 },
+    { OMX_VIDEO_VP9Profile2HDR, OMX_VIDEO_VP9Level51 },
+    { OMX_VIDEO_VP9Profile2HDR10Plus, OMX_VIDEO_VP9Level51 },
 };
 
 OMX_ERRORTYPE Rkvpu_OMX_UseBuffer(
@@ -712,11 +701,14 @@ OMX_ERRORTYPE Rkvpu_ResolutionUpdate(OMX_COMPONENTTYPE *pOMXComponent)
     ROCKCHIP_OMX_BASECOMPONENT      *pRockchipComponent   = (ROCKCHIP_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
     ROCKCHIP_OMX_BASEPORT           *pInputPort         = &pRockchipComponent->pRockchipPort[INPUT_PORT_INDEX];
     ROCKCHIP_OMX_BASEPORT           *pOutputPort        = &pRockchipComponent->pRockchipPort[OUTPUT_PORT_INDEX];
+    RKVPU_OMX_VIDEODEC_COMPONENT    *pVideoDec          = NULL;
 
     pOutputPort->cropRectangle.nTop     = pOutputPort->newCropRectangle.nTop;
     pOutputPort->cropRectangle.nLeft    = pOutputPort->newCropRectangle.nLeft;
     pOutputPort->cropRectangle.nWidth   = pOutputPort->newCropRectangle.nWidth;
     pOutputPort->cropRectangle.nHeight  = pOutputPort->newCropRectangle.nHeight;
+
+    pVideoDec = (RKVPU_OMX_VIDEODEC_COMPONENT *)pRockchipComponent->hComponentHandle;
 
     pInputPort->portDefinition.format.video.nFrameWidth     = pInputPort->newPortDefinition.format.video.nFrameWidth;
     pInputPort->portDefinition.format.video.nFrameHeight    = pInputPort->newPortDefinition.format.video.nFrameHeight;
@@ -875,8 +867,8 @@ OMX_ERRORTYPE Rkvpu_Frame2Outbuf(OMX_COMPONENTTYPE *pOMXComponent, OMX_BUFFERHEA
     VPUMemInvalidate(&pframe->vpumem);
 
     omx_trace("width:%d,height:%d ", mWidth, mHeight);
-    mStride = Get_Video_HorAlign(pVideoDec->codecId, mWidth, mHeight, pVideoDec->codecProfile);
-    mSliceHeight = Get_Video_VerAlign(pVideoDec->codecId, mHeight, pVideoDec->codecProfile);
+    mStride = pframe->FrameWidth;
+    mSliceHeight = pframe->FrameHeight;
     {
         //csy@rock-chips.com
         OMX_U8 *buff_vir = (OMX_U8 *)pframe->vpumem.vir_addr;
@@ -1367,8 +1359,27 @@ OMX_ERRORTYPE Rkvpu_OMX_GetParameter(
 #ifdef AVS80
         if (portIndex == OUTPUT_PORT_INDEX &&
             pRockchipPort->bufferProcessType == BUFFER_SHARE) {
-            portDefinition->format.video.nFrameWidth = portDefinition->format.video.nStride;
-            portDefinition->format.video.nFrameHeight = portDefinition->format.video.nSliceHeight;
+            ROCKCHIP_OMX_BASEPORT *pInputPort = &pRockchipComponent->pRockchipPort[INPUT_PORT_INDEX];
+            int32_t depth = (pVideoDec->bIs10bit) ? OMX_DEPTH_BIT_10 : OMX_DEPTH_BIT_8;
+            OMX_BOOL fbcMode = Rockchip_OSAL_Check_Use_FBCMode(pVideoDec->codecId, depth, pRockchipPort);
+
+            /*
+             * We use pixel_stride instead of byte_stride to setup nativeWindow surface
+             * for 10bit source at fbcMode
+             */
+            if (!pVideoDec->bIs10bit || !fbcMode) {
+                portDefinition->format.video.nFrameWidth = portDefinition->format.video.nStride;
+            }
+
+            if (fbcMode && (pVideoDec->codecId == OMX_VIDEO_CodingHEVC
+                            || pVideoDec->codecId == OMX_VIDEO_CodingAVC)) {
+                OMX_U32 height = pInputPort->portDefinition.format.video.nFrameHeight;
+                // On FBC case H.264/H.265 decoder will add 4 lines blank on top.
+                portDefinition->format.video.nFrameHeight
+                    = Get_Video_VerAlign(pVideoDec->codecId, height + 4, pVideoDec->codecProfile);
+            } else {
+                portDefinition->format.video.nFrameHeight = portDefinition->format.video.nSliceHeight;
+            }
         }
 #endif
     }
@@ -1457,6 +1468,14 @@ OMX_ERRORTYPE Rkvpu_OMX_GetParameter(
             }
             profileLevel->eProfile = kH265ProfileLevels[index].mProfile;
             profileLevel->eLevel = kH265ProfileLevels[index].mLevel;
+        } else if (pVideoDec->codecId == OMX_VIDEO_CodingVP9) {
+            nProfileLevels =
+                sizeof(kVP9ProfileLevels) / sizeof(kVP9ProfileLevels[0]);
+            if (index >= nProfileLevels) {
+                return OMX_ErrorNoMore;
+            }
+            profileLevel->eProfile = kVP9ProfileLevels[index].mProfile;
+            profileLevel->eLevel = kVP9ProfileLevels[index].mLevel;
         } else if (pVideoDec->codecId  == OMX_VIDEO_CodingMPEG4) {
             nProfileLevels =
                 sizeof(kM4VProfileLevels) / sizeof(kM4VProfileLevels[0]);
@@ -1734,6 +1753,23 @@ OMX_ERRORTYPE Rkvpu_OMX_SetParameter(
         Rockchip_OSAL_Memcpy(pDstAVCComponent, pSrcAVCComponent, sizeof(OMX_VIDEO_PARAM_AVCTYPE));
     }
     break;
+    case OMX_IndexParamVideoProfileLevelCurrent: {
+        OMX_VIDEO_PARAM_PROFILELEVELTYPE *params = (OMX_VIDEO_PARAM_PROFILELEVELTYPE *)ComponentParameterStructure;
+        RKVPU_OMX_VIDEODEC_COMPONENT *pVideoDec = (RKVPU_OMX_VIDEODEC_COMPONENT *)pRockchipComponent->hComponentHandle;
+        if (pVideoDec != NULL) {
+            if (pVideoDec->codecId == OMX_VIDEO_CodingHEVC) {
+                if (params->eProfile >= OMX_VIDEO_HEVCProfileMain10) {
+                    pVideoDec->bIs10bit = OMX_TRUE;
+                }
+            } else if (pVideoDec->codecId == OMX_VIDEO_CodingAVC) {
+                if (params->eProfile == OMX_VIDEO_AVCProfileHigh10) {
+                    pVideoDec->bIs10bit = OMX_TRUE;
+                }
+            } else if (pVideoDec->codecId == OMX_VIDEO_CodingVP9) {
+            }
+        }
+    }
+    break;
     default: {
         ret = Rockchip_OMX_SetParameter(hComponent, nIndex, ComponentParameterStructure);
     }
@@ -1803,6 +1839,15 @@ OMX_ERRORTYPE Rkvpu_OMX_GetConfig(
             Rockchip_OSAL_Memcpy(rectParams, &(pRockchipPort->cropRectangle), sizeof(OMX_CONFIG_RECTTYPE));
         else
             rectParams->nWidth = rectParams->nHeight = 1;
+
+        // fbc output buffer offset X/Y
+        int32_t depth = (pVideoDec->bIs10bit) ? OMX_DEPTH_BIT_10 : OMX_DEPTH_BIT_8;
+        if (Rockchip_OSAL_Check_Use_FBCMode(pVideoDec->codecId, depth, pRockchipPort)) {
+            if (pVideoDec->codecId == OMX_VIDEO_CodingHEVC
+                || pVideoDec->codecId == OMX_VIDEO_CodingAVC) {
+                rectParams->nTop = 4;
+            }
+        }
         omx_info("rectParams:%d %d %d %d", rectParams->nLeft, rectParams->nTop, rectParams->nWidth, rectParams->nHeight);
     }
     break;
@@ -2214,9 +2259,26 @@ OMX_ERRORTYPE Rkvpu_UpdatePortDefinition(
     }
 
     if (OUTPUT_PORT_INDEX == nPortIndex) {
-        /*
-         * reverse
-         */
+        int32_t depth = (pVideoDec->bIs10bit) ? OMX_DEPTH_BIT_10 : OMX_DEPTH_BIT_8;
+        OMX_BOOL fbcMode = Rockchip_OSAL_Check_Use_FBCMode(pVideoDec->codecId, depth, pRockchipPort);
+        OMX_COLOR_FORMATTYPE format = pRockchipPort->portDefinition.format.video.eColorFormat;
+
+        if (fbcMode) {
+            // fbc stride default 64 align
+            nStride = (nFrameWidth + 63) & (~63);
+            pRockchipPort->portDefinition.format.video.nStride = nStride;
+
+            if (format == OMX_COLOR_FormatYUV420Planar || format == OMX_COLOR_FormatYUV420SemiPlanar) {
+                pRockchipPort->portDefinition.format.video.eColorFormat
+                    = (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_YUV420_8BIT_I;
+            } else if (format == OMX_COLOR_FormatYUV422Planar || format == OMX_COLOR_FormatYUV422SemiPlanar) {
+                pRockchipPort->portDefinition.format.video.eColorFormat
+                    = (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_YCbCr_422_I;
+            }
+        }
+        omx_info("update output PortDefinition [%d,%d,%d,%d], eColorFormat 0x%x->0x%x",
+                 nFrameWidth, nFrameHeight, nStride, nSliceHeight, format,
+                 pRockchipPort->portDefinition.format.video.eColorFormat);
     }
 
     /*

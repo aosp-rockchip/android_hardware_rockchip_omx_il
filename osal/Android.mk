@@ -103,6 +103,10 @@ ifeq ($(OMX_USE_DRM), true)
 			     $(TOP)/external/libdrm/include/drm/
 endif
 
+ifeq ($(strip $(TARGET_BOARD_PLATFORM)), rk356x)
+	LOCAL_CFLAGS += -DSUPPORT_AFBC
+endif
+
 LOCAL_CFLAGS += -Werror
 
 include $(BUILD_STATIC_LIBRARY)

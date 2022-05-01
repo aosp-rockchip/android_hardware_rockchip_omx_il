@@ -47,6 +47,11 @@ typedef struct _ROCKCHIP_OMX_REF_HANDLE {
     ROCKCHIP_OMX_SHARED_BUFFER SharedBuffer[MAX_BUFFER_REF];
 } ROCKCHIP_OMX_REF_HANDLE;
 
+enum _ROCKCHIP_OMX_DEPTH {
+    OMX_DEPTH_BIT_8,
+    OMX_DEPTH_BIT_10,
+    // add more
+};
 
 #ifdef __cplusplus
 extern "C" {
@@ -121,6 +126,8 @@ OMX_ERRORTYPE  Rockchip_OSAL_Openvpumempool(OMX_IN ROCKCHIP_OMX_BASECOMPONENT *p
 OMX_ERRORTYPE  Rockchip_OSAL_Closevpumempool(OMX_IN ROCKCHIP_OMX_BASECOMPONENT *pRockchipComponent);
 
 OMX_ERRORTYPE Rockchip_OSAL_resetVpumemPool(OMX_IN ROCKCHIP_OMX_BASECOMPONENT *pRockchipComponent);
+
+OMX_BOOL Rockchip_OSAL_Check_Use_FBCMode(OMX_VIDEO_CODINGTYPE codecId, int32_t depth, ROCKCHIP_OMX_BASEPORT *pPort);
 
 OMX_COLOR_FORMATTYPE Rockchip_OSAL_CheckFormat(ROCKCHIP_OMX_BASECOMPONENT *pRockchipComponent, OMX_IN OMX_PTR pVpuframe);
 OMX_ERRORTYPE Rockchip_OSAL_getANBHandle(OMX_IN OMX_PTR handle, OMX_OUT OMX_PTR planes);

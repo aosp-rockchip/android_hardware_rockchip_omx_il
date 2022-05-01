@@ -389,6 +389,8 @@ OMX_BOOL Rkvpu_SendInputData(OMX_COMPONENTTYPE *pOMXComponent)
             OMX_U32 extraSize = 0;
             OMX_U32 extraFlag = 0;
             OMX_U32 enableDinterlace = 1;
+            OMX_BOOL fbcMode = OMX_FALSE;
+            OMX_U32 fbcOutFmt = 0;
             if (((inputUseBuffer->nFlags & OMX_BUFFERFLAG_EXTRADATA) == OMX_BUFFERFLAG_EXTRADATA)
                 || ((inputUseBuffer->nFlags & OMX_BUFFERFLAG_CODECCONFIG) == OMX_BUFFERFLAG_CODECCONFIG)) {
                 if (pVideoDec->bDRMPlayerMode == OMX_TRUE) {
@@ -433,10 +435,26 @@ OMX_BOOL Rkvpu_SendInputData(OMX_COMPONENTTYPE *pOMXComponent)
                 p_vpu_ctx->control(p_vpu_ctx, VPU_API_SET_SECURE_CONTEXT, &coding);
             }
 #endif
+            int32_t depth = (pVideoDec->bIs10bit) ? OMX_DEPTH_BIT_10 : OMX_DEPTH_BIT_8;
+            fbcMode = Rockchip_OSAL_Check_Use_FBCMode(pVideoDec->codecId, depth, rockchipOutputPort);
+            if (fbcMode) {
+                /* fbc_Output_format: FBC_AFBC_V2 */
+                fbcOutFmt = 0x00200000;
+            }
+
+            p_vpu_ctx->private_data = &fbcOutFmt;
             p_vpu_ctx->init(p_vpu_ctx, extraData, extraSize);
+            p_vpu_ctx->private_data = NULL;
             if (pVideoDec->bDRMPlayerMode == OMX_TRUE) {
                 Rockchip_OSAL_SharedMemory_SecureUnmap(pVideoDec->hSharedMemory, extraData, DEFAULT_VIDEO_INPUT_BUFFER_SIZE);
             }
+
+            if (fbcMode) {
+                omx_info("use vpu fbc output mode");
+
+                p_vpu_ctx->control(p_vpu_ctx, VPU_API_SET_OUTPUT_MODE, &fbcOutFmt);
+            }
+
             // not use iep when thumbNail decode
             if (!(pVideoDec->flags & RKVPU_OMX_VDEC_THUMBNAIL)) {
                 p_vpu_ctx->control(p_vpu_ctx, VPU_API_ENABLE_DEINTERLACE, &enableDinterlace);
@@ -560,7 +578,7 @@ OMX_BOOL Rkvpu_Post_OutputFrame(OMX_COMPONENTTYPE *pOMXComponent)
     VpuCodecContext_t           *p_vpu_ctx = pVideoDec->vpu_ctx;
     OMX_U32         pOWnBycomponetNum = Rockchip_OSAL_GetElemNum(&pOutputPort->bufferQ);
     OMX_S32 maxBufferNum = 0;
-    OMX_S32 i = 0, numInOmxAl = 0, limitNum = 8;
+    OMX_S32 i = 0, numInOmxAl = 0;
     OMX_S32 bufferUnusedInVpu = 0;
     OMX_U32 fullRange = 0;
     OMX_U32 primaries = 0;
@@ -597,15 +615,7 @@ OMX_BOOL Rkvpu_Post_OutputFrame(OMX_COMPONENTTYPE *pOMXComponent)
         Rockchip_OSAL_Memset(&pOutput, 0, sizeof(DecoderOut_t));
         Rockchip_OSAL_Memset(pframe, 0, sizeof(VPU_FRAME));
         pOutput.data = (unsigned char *)pframe;
-        if ((numInOmxAl < limitNum) ||
-            (pVideoDec->maxCount > 20)) {
-            dec_ret =  p_vpu_ctx->decode_getframe(p_vpu_ctx, &pOutput);
-            omx_trace("pOutput.size %d", pOutput.size);
-            pVideoDec->maxCount = 0;
-        } else {
-            pVideoDec->maxCount++;
-            omx_trace("pVideoDec 0x%x numInOmxAl %d", pVideoDec, numInOmxAl);
-        }
+        dec_ret = p_vpu_ctx->decode_getframe(p_vpu_ctx, &pOutput);
         if (dec_ret < 0) {
             if (dec_ret == VPU_API_EOS_STREAM_REACHED && !pframe->ErrorInfo) {
                 outputUseBuffer->dataLen = 0;
@@ -692,14 +702,10 @@ OMX_BOOL Rkvpu_Post_OutputFrame(OMX_COMPONENTTYPE *pOMXComponent)
                 || (pInputPort->portDefinition.format.video.nSliceHeight != pframe->FrameHeight)
                 || (pInputPort->portDefinition.format.video.nStride != (OMX_S32)pframe->FrameWidth)
                 || (pOutputPort->portDefinition.format.video.eColorFormat != eColorFormat)) {
-                omx_info("video.nFrameWidth %d video.nFrameHeight %d nSliceHeight %d",
-                         pInputPort->portDefinition.format.video.nFrameWidth,
-                         pInputPort->portDefinition.format.video.nFrameHeight,
-                         pInputPort->portDefinition.format.video.nSliceHeight);
-
-                omx_info("video.DisplayWidth %d video.DisplayWidth %d pframe->FrameHeight %d",
-                         pframe->DisplayWidth,
-                         pframe->DisplayHeight, pframe->FrameHeight);
+                omx_info("info-change with frame[%d,%d] -> [%d,%d]  eColorFormat: 0x%x",
+                         pInputPort->portDefinition.format.video.nStride,
+                         pInputPort->portDefinition.format.video.nSliceHeight,
+                         pframe->FrameWidth, pframe->FrameHeight, eColorFormat);
 
                 pOutputPort->newCropRectangle.nWidth = pframe->DisplayWidth;
                 pOutputPort->newCropRectangle.nHeight = pframe->DisplayHeight;
@@ -886,11 +892,19 @@ OMX_BOOL Rkvpu_Post_OutputFrame(OMX_COMPONENTTYPE *pOMXComponent)
                         }
                     }
                 }
+                OMX_COLOR_FORMATTYPE eColorFormat = Rockchip_OSAL_CheckFormat(pRockchipComponent, &pframe);
                 if (pInputPort->portDefinition.format.video.nFrameWidth != pframe.DisplayWidth ||
-                    pInputPort->portDefinition.format.video.nFrameHeight != pframe.DisplayHeight) {
+                    pInputPort->portDefinition.format.video.nFrameHeight != pframe.DisplayHeight ||
+                    pOutputPort->portDefinition.format.video.eColorFormat != eColorFormat) {
+                    omx_info("info-change with frame[%d,%d] -> [%d,%d]  eColorFormat: 0x%x",
+                             pInputPort->portDefinition.format.video.nStride,
+                             pInputPort->portDefinition.format.video.nSliceHeight,
+                             pframe.FrameWidth, pframe.FrameHeight, eColorFormat);
+
 
                     pOutputPort->newCropRectangle.nWidth = pframe.DisplayWidth;
                     pOutputPort->newCropRectangle.nHeight = pframe.DisplayHeight;
+                    pOutputPort->newPortDefinition.format.video.eColorFormat = eColorFormat;
                     pOutputPort->newPortDefinition.nBufferCountActual = pOutputPort->portDefinition.nBufferCountActual;
                     pOutputPort->newPortDefinition.nBufferCountMin = pOutputPort->portDefinition.nBufferCountMin;
                     pInputPort->newPortDefinition.format.video.nFrameWidth = pframe.DisplayWidth;
@@ -1075,12 +1089,24 @@ OMX_ERRORTYPE Rkvpu_OMX_OutputBufferProcess(OMX_HANDLETYPE hComponent)
             if (CHECK_PORT_BEING_FLUSHED(rockchipOutputPort))
                 break;
 
-            Rockchip_OSAL_MutexLock(dstOutputUseBuffer->bufferMutex);
+            OMX_U32 numInOmxAl = 0;
+            for (int i = 0; i < rockchipOutputPort->portDefinition.nBufferCountActual; i++) {
+                if (rockchipOutputPort->extendBufferHeader[i].bBufferInOMX == OMX_TRUE) {
+                    numInOmxAl++;
+                }
+            }
+            if (numInOmxAl == 0) {
+                /* wait output buffer avaliable */
+                Rockchip_OSAL_SemaphoreWait(rockchipOutputPort->bufferSemID);
+                Rockchip_OSAL_SleepMillisec(3);
+            }
+
             if (rockchipOutputPort->bufferProcessType == BUFFER_SHARE) {
                 if (Rkvpu_Post_OutputFrame(pOMXComponent) != OMX_TRUE) {
-                    Rockchip_OSAL_SleepMillisec(3);
+                    Rockchip_OSAL_SleepMillisec(10);
                 }
             } else {
+                Rockchip_OSAL_MutexLock(dstOutputUseBuffer->bufferMutex);
                 if ((dstOutputUseBuffer->dataValid != OMX_TRUE) &&
                     (!CHECK_PORT_BEING_FLUSHED(rockchipOutputPort))) {
                     ret = Rkvpu_OutputBufferGetQueue(pRockchipComponent);
@@ -1092,14 +1118,11 @@ OMX_ERRORTYPE Rkvpu_OMX_OutputBufferProcess(OMX_HANDLETYPE hComponent)
 
                 if (dstOutputUseBuffer->dataValid == OMX_TRUE) {
                     if (Rkvpu_Post_OutputFrame(pOMXComponent) != OMX_TRUE) {
-                        Rockchip_OSAL_SleepMillisec(3);
+                        Rockchip_OSAL_SleepMillisec(10);
                     }
                 }
+                Rockchip_OSAL_MutexUnlock(dstOutputUseBuffer->bufferMutex);
             }
-
-            /* reset outputData */
-            Rockchip_OSAL_MutexUnlock(dstOutputUseBuffer->bufferMutex);
-
         }
     }
 

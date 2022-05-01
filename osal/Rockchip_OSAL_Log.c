@@ -40,14 +40,14 @@ void _Rockchip_OSAL_Log(ROCKCHIP_LOG_LEVEL logLevel, OMX_U32 flag, const char *t
 
     switch (logLevel) {
     case ROCKCHIP_LOG_TRACE: {
-        Rockchip_OSAL_GetEnvU32("vendor.dump.omx.log", &value, 0);
+        // Rockchip_OSAL_GetEnvU32("vendor.dump.omx.log", &value, 0);
         if (value) {
             __android_log_vprint(ANDROID_LOG_DEBUG, tag, msg, argptr);
         }
     }
     break;
     case ROCKCHIP_LOG_DEBUG: {
-        Rockchip_OSAL_GetEnvU32("vendor.omx.log.debug", &value, 0);
+        // Rockchip_OSAL_GetEnvU32("vendor.omx.log.debug", &value, 0);
         if (value & flag) {
             __android_log_vprint(ANDROID_LOG_DEBUG, tag, msg, argptr);
         }
